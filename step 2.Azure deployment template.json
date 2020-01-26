@@ -1,0 +1,318 @@
+{
+    "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "allowSshFromIpRange": {
+            "type": "string",
+            "minLength": 9,
+            "maxLength": 18,
+            "metadata": {
+                "description": "IP addresses whitelisted for SSH. (Eg. 123.4.5.6/32 )"
+            }
+        },
+        "adminPassword": {
+            "type": "securestring"
+        },
+        "awsInboundResolverIp1": {
+            "type": "string"
+        },
+        "awsInboundResolverIp2": {
+            "type": "string"
+        }
+    },
+    "variables": {
+        "adminUserName": "adminuser"
+    },
+    "resources": [
+        {
+            "name": "virtual-network",
+            "type": "Microsoft.Network/virtualNetworks",
+            "apiVersion": "2016-03-30",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "addressSpace": {
+                    "addressPrefixes": [
+                        "10.1.0.0/16"
+                    ]
+                },
+                "subnets": [
+                    {
+                        "name": "subnet",
+                        "properties": {
+                            "addressPrefix": "10.1.0.0/24"
+                        }
+                    },
+                    {
+                        "name": "GatewaySubnet",
+                        "properties": {
+                            "addressPrefix": "10.1.255.0/24"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "name": "vpn-public-ip",
+            "type": "Microsoft.Network/publicIpAddresses",
+            "apiVersion": "2019-09-01",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "publicIpAllocationMethod": "Dynamic"
+            },
+            "sku": {
+                "name": "Basic"
+            }
+        },
+        {
+            "name": "vpn-gateway",
+            "type": "Microsoft.Network/virtualNetworkGateways",
+            "apiVersion": "2019-02-01",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "virtual-network",
+                "vpn-public-ip"
+            ],
+            "properties": {
+                "gatewayType": "Vpn",
+                "ipConfigurations": [
+                    {
+                        "name": "default",
+                        "properties": {
+                            "privateIPAllocationMethod": "Dynamic",
+                            "subnet": {
+                                "id": "[resourceId(resourceGroup().name, 'Microsoft.Network/virtualNetworks/subnets', 'virtual-network', 'GatewaySubnet')]"
+                            },
+                            "publicIpAddress": {
+                                "id": "[resourceId(resourceGroup().name, 'Microsoft.Network/publicIPAddresses', 'vpn-public-ip')]"
+                            }
+                        }
+                    }
+                ],
+                "vpnType": "RouteBased",
+                "vpnGatewayGeneration": "Generation1",
+                "sku": {
+                    "name": "VpnGw1",
+                    "tier": "VpnGw1"
+                }
+            }
+        },
+        {
+            "name": "dns-forwarder-public-ip",
+            "type": "Microsoft.Network/publicIpAddresses",
+            "apiVersion": "2019-09-01",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "publicIpAllocationMethod": "Dynamic"
+            },
+            "sku": {
+                "name": "Basic"
+            }
+        },
+        {
+            "name": "sg-dns-forwarder",
+            "type": "Microsoft.Network/networkSecurityGroups",
+            "apiVersion": "2019-02-01",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "securityRules": []
+            }
+        },
+        {
+            "name": "dns-forwarder-network-interface",
+            "type": "Microsoft.Network/networkInterfaces",
+            "dependsOn": [
+                "virtual-network",
+                "dns-forwarder-public-ip",
+                "sg-dns-forwarder"
+            ],
+            "comments": "A single network interface on each DNS server",
+            "apiVersion": "2015-06-15",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "ipconfig1",
+                        "properties": {
+                            "privateIPAllocationMethod": "Dynamic",
+                            "publicIpAddress": {
+                                "id": "[resourceId(resourceGroup().name, 'Microsoft.Network/publicIpAddresses', 'dns-forwarder-public-ip')]"
+                            },
+                            "subnet": {
+                                "id": "[resourceId(resourceGroup().name, 'Microsoft.Network/virtualNetworks/subnets', 'virtual-network', 'subnet')]"
+                            }
+                        }
+                    }
+                ],
+                "networkSecurityGroup": {
+                    "id": "[resourceId(resourceGroup().name, 'Microsoft.Network/networkSecurityGroups', 'sg-dns-forwarder')]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Compute/virtualMachines",
+            "comments": "A stock Ubuntu server, a VM extension will add the DNS server to it later",
+            "name": "dns-forwarder",
+            "apiVersion": "2017-03-30",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "dns-forwarder-network-interface"
+            ],
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "Standard_B1ms"
+                },
+                "osProfile": {
+                    "computerName": "dns-forwarder",
+                    "adminUsername": "[variables('adminUserName')]",
+                    "adminPassword": "[parameters('adminPassword')]"
+                },
+                "storageProfile": {
+                    "imageReference": {
+                        "publisher": "Canonical",
+                        "offer": "UbuntuServer",
+                        "sku": "14.04.2-LTS",
+                        "version": "latest"
+                    },
+                    "osDisk": {
+                        "caching": "ReadWrite",
+                        "createOption": "FromImage"
+                    }
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId(resourceGroup().name, 'Microsoft.Network/networkInterfaces', 'dns-forwarder-network-interface')]"
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "comments": "The shell script to install Bind9 and setup the ACL and forwarders.  If this step fails, check the logs in /var/log/waagent.log and /var/log/azure/* for details",
+            "name": "dns-forwarder/setupdnsfirewall",
+            "apiVersion": "2015-06-15",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "dns-forwarder"
+            ],
+            "properties": {
+                "publisher": "Microsoft.Azure.Extensions",
+                "type": "CustomScript",
+                "typeHandlerVersion": "2.0",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                    "fileUris": [
+                        "https://raw.githubusercontent.com/MaksimAniskov/aws-azure-hybrid/master/forwarderSetup.sh"
+                    ],
+                    "commandToExecute": "[concat('sh forwarderSetup.sh 168.63.129.16 10.0.0.0/8 aws.mycompany \"', parameters('awsInboundResolverIp1'), ';', parameters('awsInboundResolverIp2'), '\"')]"
+                }
+            }
+        },
+        {
+            "name": "sg-host1",
+            "type": "Microsoft.Network/networkSecurityGroups",
+            "apiVersion": "2019-02-01",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "securityRules": [
+                    {
+                        "name": "SSH",
+                        "properties": {
+                            "priority": 300,
+                            "protocol": "Tcp",
+                            "access": "Allow",
+                            "direction": "Inbound",
+                            "sourceAddressPrefix": "[parameters('allowSshFromIpRange')]",
+                            "sourcePortRange": "*",
+                            "destinationAddressPrefix": "*",
+                            "destinationPortRange": "22"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "name": "host1-public-ip",
+            "type": "Microsoft.Network/publicIpAddresses",
+            "apiVersion": "2019-09-01",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "publicIpAllocationMethod": "Dynamic"
+            },
+            "sku": {
+                "name": "Basic"
+            }
+        },
+        {
+            "name": "host1-network-interface",
+            "type": "Microsoft.Network/networkInterfaces",
+            "dependsOn": [
+                "virtual-network",
+                "sg-host1",
+                "host1-public-ip"
+            ],
+            "apiVersion": "2019-07-01",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "ipconfig1",
+                        "properties": {
+                            "subnet": {
+                                "id": "[resourceId(resourceGroup().name, 'Microsoft.Network/virtualNetworks/subnets', 'virtual-network', 'subnet')]"
+                            },
+                            "privateIPAllocationMethod": "Dynamic",
+                            "publicIpAddress": {
+                                "id": "[resourceId(resourceGroup().name, 'Microsoft.Network/publicIpAddresses', 'host1-public-ip')]"
+                            }
+                        }
+                    }
+                ],
+                "networkSecurityGroup": {
+                    "id": "[resourceId(resourceGroup().name, 'Microsoft.Network/networkSecurityGroups', 'sg-host1')]"
+                }
+            }
+        },
+        {
+            "name": "host1",
+            "type": "Microsoft.Compute/virtualMachines",
+            "apiVersion": "2019-07-01",
+            "dependsOn": [
+                "host1-network-interface"
+            ],
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "Standard_B1ls"
+                },
+                "storageProfile": {
+                    "osDisk": {
+                        "createOption": "fromImage",
+                        "managedDisk": {
+                            "storageAccountType": "Standard_LRS"
+                        }
+                    },
+                    "imageReference": {
+                        "publisher": "Canonical",
+                        "offer": "UbuntuServer",
+                        "sku": "18.04-LTS",
+                        "version": "latest"
+                    }
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId(resourceGroup().name, 'Microsoft.Network/networkInterfaces', 'host1-network-interface')]"
+                        }
+                    ]
+                },
+                "osProfile": {
+                    "computerName": "host1",
+                    "adminUsername": "[variables('adminUserName')]",
+                    "adminPassword": "[parameters('adminPassword')]"
+                }
+            }
+        }
+    ]
+}

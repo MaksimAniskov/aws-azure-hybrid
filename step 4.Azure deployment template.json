@@ -1,0 +1,88 @@
+{
+    "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "AwsVpnGatewayPublicIp1": {
+            "type": "string"
+        },
+        "sharedKey1": {
+            "type": "securestring"
+        },
+        "AwsVpnGatewayPublicIp2": {
+            "type": "string"
+        },
+        "sharedKey2": {
+            "type": "securestring"
+        }
+    },
+    "resources": [
+        {
+            "name": "local-network-gateway1",
+            "type": "Microsoft.Network/localNetworkGateways",
+            "apiVersion": "2019-02-01",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "localNetworkAddressSpace": {
+                    "addressPrefixes": [
+                        "10.0.0.0/16"
+                    ]
+                },
+                "gatewayIpAddress": "[parameters('AwsVpnGatewayPublicIp1')]"
+            }
+        },
+        {
+            "name": "vpn-connection1",
+            "type": "Microsoft.Network/connections",
+            "apiVersion": "2019-04-01",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "local-network-gateway1"
+            ],
+            "properties": {
+                "virtualNetworkGateway1": {
+                    "id": "[resourceId('Microsoft.Network/virtualNetworkGateways', 'vpn-gateway')]"
+                },
+                "localNetworkGateway2": {
+                    "id": "[resourceId('Microsoft.Network/localNetworkGateways', 'local-network-gateway1')]"
+                },
+                "connectionType": "IPsec",
+                "routingWeight": 10,
+                "sharedKey": "[parameters('sharedKey1')]"
+            }
+        },
+        {
+            "name": "local-network-gateway2",
+            "type": "Microsoft.Network/localNetworkGateways",
+            "apiVersion": "2019-02-01",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "localNetworkAddressSpace": {
+                    "addressPrefixes": [
+                        "10.0.0.0/16"
+                    ]
+                },
+                "gatewayIpAddress": "[parameters('AwsVpnGatewayPublicIp2')]"
+            }
+        },
+        {
+            "name": "vpn-connection2",
+            "type": "Microsoft.Network/connections",
+            "apiVersion": "2019-04-01",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "local-network-gateway2"
+            ],
+            "properties": {
+                "virtualNetworkGateway1": {
+                    "id": "[resourceId('Microsoft.Network/virtualNetworkGateways', 'vpn-gateway')]"
+                },
+                "localNetworkGateway2": {
+                    "id": "[resourceId('Microsoft.Network/localNetworkGateways', 'local-network-gateway2')]"
+                },
+                "connectionType": "IPsec",
+                "routingWeight": 10,
+                "sharedKey": "[parameters('sharedKey2')]"
+            }
+        }
+    ]
+}

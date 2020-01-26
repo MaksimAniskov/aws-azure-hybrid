@@ -1,0 +1,133 @@
+Parameters:
+  VPC:
+    Type: AWS::EC2::VPC::Id
+
+  Subnet1:
+    Type: AWS::EC2::Subnet::Id
+
+  Subnet2:
+    Type: AWS::EC2::Subnet::Id
+
+  AzureVpnGatewayPublicIp:
+    Type: String
+
+  AzureDnsForwarderIp:
+    Type: String
+
+Resources:
+  CustomerGateway:
+    Type: AWS::EC2::CustomerGateway
+    Properties:
+      BgpAsn: 65000
+      Type: ipsec.1
+      IpAddress: !Ref AzureVpnGatewayPublicIp
+      Tags:
+        - Key: Name
+          Value: !Ref "AWS::StackName"
+
+  VPNGateway:
+    Type: AWS::EC2::VPNGateway
+    Properties:
+      Type: ipsec.1
+
+  VPNGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      VpnGatewayId: !Ref VPNGateway
+
+  VPNConnection:
+    Type: AWS::EC2::VPNConnection
+    Properties:
+      Type: ipsec.1
+      CustomerGatewayId: !Ref CustomerGateway
+      StaticRoutesOnly: true
+      VpnGatewayId: !Ref VPNGateway
+      Tags:
+        - Key: Name
+          Value: !Ref "AWS::StackName"
+
+  VPNConnectionRoute:
+    Type: AWS::EC2::VPNConnectionRoute
+    Properties:
+      DestinationCidrBlock: 10.1.0.0/16
+      VpnConnectionId: !Ref VPNConnection
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+
+  RouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref Subnet1
+
+  RouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref Subnet2
+
+  RouteVGW:
+    Type: AWS::EC2::Route
+    DependsOn:
+      - VPNGatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 10.1.0.0/16
+      GatewayId: !Ref VPNGateway
+
+  SGOutboundResolver:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allows all TCP and UDP on port 53
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          ToPort: 53
+          FromPort: 53
+          CidrIp: 10.1.0.0/16
+        - IpProtocol: udp
+          ToPort: 53
+          FromPort: 53
+          CidrIp: 10.1.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-outbound-resolver
+
+  OutboundResolver:
+    Type: AWS::Route53Resolver::ResolverEndpoint
+    Properties:
+      Direction: OUTBOUND
+      IpAddresses:
+        - SubnetId: !Ref Subnet1
+        - SubnetId: !Ref Subnet2
+      Name: !Ref "AWS::StackName"
+      SecurityGroupIds:
+        - !Ref SGOutboundResolver
+
+  ResolverRule:
+    Type: AWS::Route53Resolver::ResolverRule
+    Properties:
+      ResolverEndpointId: !Ref OutboundResolver
+      Name: Forward to Azure
+      DomainName: cloudapp.net
+      RuleType: FORWARD
+      TargetIps:
+        - Ip: !Ref AzureDnsForwarderIp
+          Port: "53"
+
+  ResolverRuleAssociation:
+    Type: AWS::Route53Resolver::ResolverRuleAssociation
+    Properties: 
+      ResolverRuleId: !Ref ResolverRule
+      VPCId: !Ref VPC
+
+Outputs:
+  VPNConnectionId:
+    Value: !Ref VPNConnection

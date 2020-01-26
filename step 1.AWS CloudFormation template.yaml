@@ -1,0 +1,130 @@
+Parameters:
+  InstanceAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Ref "AWS::StackName"
+
+  Subnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ""
+      CidrBlock: 10.0.0.0/24
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+
+  Subnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ""
+      CidrBlock: 10.0.1.0/24
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+
+  SGInboundResolver:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allows all TCP and UDP on port 53
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          ToPort: 53
+          FromPort: 53
+          CidrIp: 10.1.0.0/16
+        - IpProtocol: udp
+          ToPort: 53
+          FromPort: 53
+          CidrIp: 10.1.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-inbound-resolver
+
+  InboundResolver:
+    Type: AWS::Route53Resolver::ResolverEndpoint
+    Properties:
+      Direction: INBOUND
+      IpAddresses:
+        - SubnetId: !Ref Subnet1
+        - SubnetId: !Ref Subnet2
+      Name: !Ref "AWS::StackName"
+      SecurityGroupIds:
+        - !Ref SGInboundResolver
+
+  SGAllPrivateTraffic:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allows all 10.x.x.x traffic
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: "-1"
+          CidrIp: 10.0.0.0/8
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 10.0.0.0/8
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-all-private-traffic
+
+  host2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref InstanceAmiId
+      InstanceType: t3.nano
+      SubnetId: !Ref Subnet1
+      SecurityGroupIds:
+        - !Ref SGAllPrivateTraffic
+      KeyName: !Ref KeyPairName
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: aws.mycompany
+      VPCs:
+        - VPCId: !Ref VPC
+          VPCRegion: !Ref AWS::Region
+
+  Host2RecordSet:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: host2.aws.mycompany
+      Type: A
+      ResourceRecords:
+        - !GetAtt host2.PrivateIp
+      TTL: "60" # TODO: Delete me
+
+Outputs:
+  VPC:
+    Value: !Ref VPC
+
+  Subnet1:
+    Value: !Ref Subnet1
+
+  Subnet2:
+    Value: !Ref Subnet2
+
+  Host2Name:
+    Value: !Ref Host2RecordSet
