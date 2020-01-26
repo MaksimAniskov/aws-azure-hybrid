@@ -15,7 +15,7 @@ Flow of DNS queries when resolving from Azure
 ![Flow of DNS queries when resolving from Azure](README.images/architecture%20DNS%20Azure-AWS.png "Flow of DNS queries when resolving from Azure")
 
 
-To get much more details on the topic, watching awesome
+To get much more details on the topic, watch awesome
 [Deep dive on DNS in the hybrid cloud (NET410)](https://youtu.be/_Z5jAs2gvPA)
 AWS re:Invent 2019 session performed by [Gavin McCullagh](https://www.linkedin.com/in/gavin-mccullagh-1124492/).
 
